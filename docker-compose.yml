@@ -1,0 +1,261 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_USER: user
+      MYSQL_PASSWORD: password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - microservice_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api_gateway:
+    build: ./api_gateway
+    container_name: api_gateway
+    restart: always
+    volumes:
+      - ./api_gateway/nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - "8000:8000"
+    depends_on:
+      - auth_service
+      - product_service
+      - order_service
+      - payment_service
+      - cart_service
+    networks:
+      - microservice_network
+
+  auth_service:
+    build: ./services/auth_service
+    container_name: auth_service
+    restart: always
+    volumes:
+      - ./services/auth_service:/app
+    ports:
+      - "8001:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - DB_NAME=auth_db
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - SECRET_KEY=django-insecure-auth-service-key
+      - DEBUG=True
+      
+    networks:
+      - microservice_network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  product_service:
+    build: ./services/product_service
+    container_name: product_service
+    restart: always
+    volumes:
+      - ./services/product_service:/app
+      - product_media:/app/media
+    ports:
+      - "8002:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - DB_NAME=product_db
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - SECRET_KEY=django-insecure-product-service-key
+      - DEBUG=True
+      - API_GATEWAY_URL=http://localhost:8000
+      - RUNNING_IN_DOCKER=True
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+    networks:
+      - microservice_network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - microservice_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  cart_service:
+    build: ./services/cart_service
+    container_name: cart_service
+    restart: always
+    volumes:
+      - ./services/cart_service:/app
+    ports:
+      - "8005:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - SECRET_KEY=django-insecure-cart-service-key
+      - JWT_SECRET_KEY=django-insecure-auth-service-key
+      - DEBUG=True
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    networks:
+      - microservice_network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  order_service:
+    build: ./services/order_service
+    container_name: order_service
+    restart: always
+    volumes:
+      - ./services/order_service:/app
+    ports:
+      - "8003:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - INTERNAL_API_TOKEN=my_dev_token_1234567890
+      - DB_NAME=order_db
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - SECRET_KEY=django-insecure-order-service-key
+      - DEBUG=True
+      - RUNNING_IN_DOCKER=True
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+    networks:
+      - microservice_network
+    command: >
+      sh -c "pip install -r requirements.txt &&
+             python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  payment_service:
+    build: ./services/payment_service
+    container_name: payment_service
+    restart: always
+    volumes:
+      - ./services/payment_service:/app
+    ports:
+      - "8004:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - INTERNAL_API_TOKEN=my_dev_token_1234567890
+      - DB_NAME=payment_db
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - SECRET_KEY=django-insecure-payment-service-key
+      - DEBUG=True
+      - RUNNING_IN_DOCKER=True
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=guest
+      - RABBITMQ_PASS=guest
+    networks:
+      - microservice_network
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    networks:
+      - microservice_network
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  seed_data:
+    build: ./seed_data
+    container_name: seed_data
+    volumes:
+      - ./seed_data:/app
+      - ./frontend:/app/frontend
+    depends_on:
+      mysql:
+        condition: service_healthy
+      auth_service:
+        condition: service_started
+      product_service:
+        condition: service_started
+      order_service:
+        condition: service_started
+      payment_service:
+        condition: service_started
+    environment:
+      - API_GATEWAY_URL=http://api_gateway:8000
+    networks:
+      - microservice_network
+    command: ["python", "seed.py"]
+
+  frontend:
+    build: ./frontend
+    container_name: frontend-app
+    ports:
+      - "8080:80"
+    depends_on:
+      - api_gateway
+    networks:
+      - microservice_network
+
+networks:
+  microservice_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  product_media:
+  redis_data:

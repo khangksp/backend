@@ -1,0 +1,9 @@
+Django==4.2.7
+djangorestframework==3.14.0
+django-cors-headers==4.3.0
+django-redis==5.4.0
+redis==5.0.1
+mysqlclient==2.2.0
+PyJWT==2.8.0
+pika==1.2.0
+python-dotenv==1.0.0
